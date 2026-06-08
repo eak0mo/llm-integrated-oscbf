@@ -23,6 +23,16 @@ In general, this will be especialy useful for enforcing safety during **teleoper
 For more details and videos, check out the [project webpage](https://stanfordasl.github.io/oscbf/) as well as the [CBFpy documentation](https://danielpmorton.github.io/cbfpy/).
 
 
+## LLM Integration & Extensions in this Project
+
+This fork integrates Large Language Models (LLMs) to automatically synthesize the required control barrier function (CBF) parameters from high-level user descriptions of the environment and task, full project in [Project Github](https://github.com/eak0mo/aims-project).
+
+Key additions in this project include:
+- **Automated LLM Barrier Synthesis**: Translates natural language descriptions of the robot workspace, task trajectory (sinusoidal/waypoints), and collision obstacles into structured EE (End-Effector) and WB (Whole-Body) barrier bounds.
+- **Systematic Evaluation Metrics**: A metrics computation module measuring tracking errors (MTE), safety violation rates (SVR), collision intersections, barrier activation rate, control effort, and joint torques.
+- **Comparative Model Evaluation**: Scripts for benchmarking various local LLMs (e.g., Llama 3.1, Gemma 4, Qwen 3.5) with different prompting designs (`v1`, `v1.5`, `v2`, `pnp`) and generating statistical comparative plots.
+
+
 ## How do I use this?
 
 Check out the `examples/` folder for interactive demos in Pybullet! This is the best place to start

@@ -11,6 +11,8 @@ should give a good view of the controller's performance under common situations
 encountered in practice.
 """
 
+import sys
+import pybullet
 from functools import partial
 
 import numpy as np
@@ -18,16 +20,33 @@ import jax
 import jax.numpy as jnp
 from jax.typing import ArrayLike
 from cbfpy import CBF
+import pandas as pd
+import ast
+import os
+
+sys.path.append("././")
+# importing custom library
+from barriertransformer import barrier_generate as barrier
+from barriertransformer import visualization as vis
+from barriertransformer import metrics as met
 
 from oscbf.core.manipulator import Manipulator, load_panda
 from oscbf.core.manipulation_env import FrankaTorqueControlEnv
 from oscbf.core.oscbf_configs import OSCBFTorqueConfig
+from oscbf.utils.trajectory import SinusoidalTaskTrajectory, WaypointTaskTrajectory
 from oscbf.core.controllers import PoseTaskTorqueController
+
+RECORD_VIDEO = False
+SAVE_DATA = False
+SHOW_IMAGES = False
+name_date = "mult_saf_pnp_qwen3.5_35b_v2"
+
+exp_title = "Multiple_Safety_Conditions_pnp_qwen3.5_35b"
+prompt_ver = "v2"
 
 
 @jax.tree_util.register_static
 class CombinedConfig(OSCBFTorqueConfig):
-
     def __init__(
         self,
         robot: Manipulator,
@@ -156,17 +175,111 @@ def compute_control(
         c=c,
     )
     # Apply the CBF safety filter
-    return cbf.safety_filter(z, u_nom)
+    tau = cbf.safety_filter(z, u_nom)
+    return tau, u_nom
 
 
 def main():
     robot = load_panda()
-    ee_pos_min = np.array([0.15, -0.25, 0.25])
-    ee_pos_max = np.array([0.75, 0.25, 0.75])
-    wb_pos_min = np.array([-0.5, -0.5, 0.0])
-    wb_pos_max = np.array([0.75, 0.5, 1.0])
+    # ee_pos_min = np.array([0.15, -0.25, 0.25])
+    # ee_pos_max = np.array([0.75, 0.25, 0.75])
+    # wb_pos_min = np.array([-0.5, -0.5, 0.0])
+    # wb_pos_max = np.array([0.75, 0.5, 1.0])
+
+    ee_init_pos = (0.240, -0.000, 0.429)
+
     collision_pos = np.array([[0.5, 0.5, 0.5]])
     collision_radii = np.array([0.3])
+
+    sinusoid_init_pos = (0.39, 0.37, 0.33)
+    amplitude = (0, 0, 0.29)
+    frequency = (0, 0, 4.18)
+
+    # prompt = barrier.create_prompt_col_old(
+    #     ([0, 0, 0]),
+    #     ([0.240, -0.000, 0.429]),
+    #     sinusoid_init_pos,
+    #     amplitude,
+    #     frequency,
+    #     collision_pos.tolist(),
+    #     collision_radii,
+    # )
+
+    prompt = barrier.create_prompt_col(
+        ee_init_pos,
+        sinusoid_init_pos,
+        amplitude,
+        frequency,
+        collision_pos,
+        collision_radii,
+    )
+
+    # pick and drop trajectory
+    # waypoint/pick and drop traj
+    way_point_init_post = (0.45, -0.5, 0.55)
+    waypoints = np.array(
+        [
+            [0.45, -0.5, 0.55],  # t=0.0s: Start above pick location
+            [0.45, -0.5, 0.15],  # t=2.0s: Reach down to pick object
+            [0.45, -0.5, 0.55],  # t=4.0s: Lift object back up
+            [0.45, 0.50, 0.55],  # t=7.0s: Move horizontally above drop location
+            [0.45, 0.50, 0.15],  # t=9.0s: Lower down to drop location
+        ]
+    )
+    # Define the exact timestamp (in seconds) for each waypoint
+    times = np.array([0.5, 2.0, 4.0, 7.0, 9.0])
+    # Maintain a constant downward-facing end-effector orientation
+    init_rot = np.array(
+        [
+            [1, 0, 0],
+            [0, -1, 0],
+            [0, 0, -1],
+        ]
+    )
+
+    # pick and drop prompt
+    # prompt = create_prompt_pnp(ee_init_pos, way_point_init_post, waypoints, times)
+
+    # print(prompt)
+
+    # integration with llama 3.1
+    # model = "llama3.1:latest"
+    # print(f"Generating Barrier from {model}")
+    # ee_pos_min, ee_pos_max, wb_pos_min, wb_pos_max = barrier.generate_barrier(
+    #     user_prompt=prompt
+    # )
+    # print("Barriers Generated: ee:", ee_pos_min, ee_pos_max)
+    # print("Barriers Generated: whole body:", wb_pos_min, wb_pos_max)
+
+    # tests for llm results
+    # Dynamically locate the results folder relative to this script's path
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    folder = os.path.join(script_dir, "..", "..", "results", "llm_res", "pnp_qwen3.5_35b")
+    filename = "2026-05-23_Multiple_Safety_Conditions_qwen3.5_35b_v2_barriers.csv"
+    filepath = os.path.normpath(os.path.join(folder, filename))
+
+    # Read CSV
+    df = pd.read_csv(filepath)
+
+    # Convert list columns from strings to actual lists
+    list_cols = ["EE_Min", "EE_Max", "WB_Min", "WB_Max"]
+    for col in list_cols:
+        df[col] = df[col].apply(ast.literal_eval)
+
+    # Format and print results
+    for _, row in df.iterrows():
+        print(f"\nExperiment:     {row['Experiment']}")
+        print(f"Prompt Version: {row['Prompt Version']}")
+
+        # Format each list to 2 decimal places as a tuple
+        ee_pos_min = tuple(round(v, 2) for v in row["EE_Min"])
+        ee_pos_max = tuple(round(v, 2) for v in row["EE_Max"])
+        wb_pos_min = tuple(round(v, 2) for v in row["WB_Min"])
+        wb_pos_max = tuple(round(v, 2) for v in row["WB_Max"])
+
+    print(f"pos_min: {ee_pos_min}, pos_max: {ee_pos_max}")
+    print(f"wb_min: {wb_pos_min}, wb_max: {wb_pos_max}")
+
     collision_data = {"positions": collision_pos, "radii": collision_radii}
     config = CombinedConfig(
         robot,
@@ -178,12 +291,27 @@ def main():
         wb_pos_max,
     )
     cbf = CBF.from_config(config)
+    # traj = SinusoidalTaskTrajectory(
+    #     init_pos=sinusoid_init_pos,
+    #     init_rot=np.array(
+    #         [
+    #             [1, 0, 0],
+    #             [0, -1, 0],
+    #             [0, 0, -1],
+    #         ]
+    #     ),
+    #     amplitude=amplitude,
+    #     angular_freq=frequency,
+    #     phase=(0, 0, 0),
+    # )
+    traj = WaypointTaskTrajectory(waypoints=waypoints, times=times, init_rot=init_rot)
     env = FrankaTorqueControlEnv(
         config.pos_min,
         config.pos_max,
         collision_data=collision_data,
         wb_xyz_min=wb_pos_min,
         wb_xyz_max=wb_pos_max,
+        traj=traj,
         load_floor=False,
         bg_color=(1, 1, 1),
         real_time=True,
@@ -218,12 +346,133 @@ def main():
     def compute_control_jit(z, z_des):
         return compute_control(robot, osc_controller, cbf, z, z_des)
 
-    while True:
+    
+
+    # while True:
+    #     joint_state = env.get_joint_state()
+    #     ee_state_des = env.get_desired_ee_state()
+    #     tau = compute_control_jit(joint_state, ee_state_des)
+    #     env.apply_control(tau)
+    #     env.step()
+
+    if RECORD_VIDEO:
+        # for saving the video in the env
+        env.client.startStateLogging(
+            env.client.STATE_LOGGING_VIDEO_MP4, f"results/new/mulsafe/{name_date}_video.mp4"
+        )
+
+    duration = 11.0
+    timestep = 1 / 1000
+    n_timestep = int(duration / timestep)
+
+    j_state = []
+    j_state_des = []
+    u_safe = []
+    u_unsafe = []
+    h_hist = []
+
+    for i in range(n_timestep):
         joint_state = env.get_joint_state()
         ee_state_des = env.get_desired_ee_state()
-        tau = compute_control_jit(joint_state, ee_state_des)
+        tau, u_nom = compute_control_jit(joint_state, ee_state_des)
         env.apply_control(tau)
         env.step()
+
+        j_state.append(joint_state)
+        j_state_des.append(ee_state_des)
+        u_safe.append(tau)
+        u_unsafe.append(u_nom)
+
+        # Calculate h_val using config.h_2
+        h_val = config.h_2(joint_state)
+        h_hist.append(h_val)
+        
+
+        if i == 1:
+            cameras, pixel_width, pixel_height = vis.get_camera_matrices()
+            images = []
+            for view, proj in cameras:
+                width, height, rgb, depth, seg = env.client.getCameraImage(
+                    width=pixel_width,
+                    height=pixel_height,
+                    viewMatrix=view,
+                    projectionMatrix=proj,
+                    renderer=pybullet.ER_BULLET_HARDWARE_OPENGL,  # ER_TINY_RENDERER
+                )
+                images.append(rgb)
+
+            vis.plot_views(
+                images,
+                pixel_width,
+                pixel_height,
+                show_plots=SHOW_IMAGES,
+                name=f"results/new/mulsafe/{name_date}",
+                folder="test_dynamotion_plots",
+                save_image=SAVE_DATA,
+            )
+
+    ts = duration * np.arange(n_timestep)
+    vis.plot_link_simulations(
+        np.array(j_state),
+        np.array(j_state_des),
+        np.array(u_safe),
+        ts,
+        show_plots=SHOW_IMAGES,
+        save_image=SAVE_DATA,
+        name=f"results/new/mulsafe/{name_date}_links",
+    )
+
+    # --- METRICS INTEGRATION ---
+    q_pos = jnp.array(j_state)[:, : robot.num_joints]
+    p_actual = jnp.array(jax.vmap(robot.ee_position)(q_pos))
+    p_target = jnp.array(j_state_des)[:, :3]
+
+    # Calculate Whole-Body joint spheres over the trajectory using vmap
+    wb_spheres_data = jnp.array(jax.vmap(robot.link_collision_data)(q_pos))
+    joint_spheres = wb_spheres_data[:, :, :3]
+    joint_sphere_radii = np.array(wb_spheres_data[0, :, 3])
+
+    sim_data = met.SimulationData(
+        dt=timestep,
+        time=ts,
+        q_traj=q_pos,
+        u_actual=jnp.array(u_safe),
+        u_nominal=jnp.array(u_unsafe),
+        p_actual=p_actual,
+        p_target=p_target,
+        pos_min=ee_pos_min,
+        pos_max=ee_pos_max,
+        wb_min=wb_pos_min,
+        wb_max=wb_pos_max,
+        h_val=jnp.array(h_hist),
+        joint_spheres=joint_spheres,
+        joint_sphere_radii=joint_sphere_radii,
+        collision_spheres=collision_pos,
+        collision_sphere_radii=collision_radii,
+        experiment_title= exp_title,
+        prompt_version=prompt_ver,
+    )
+
+    if SAVE_DATA:
+        met.generate_report(sim_data, output_dir="results/new/mulsafe")
+        met.save_barriers_to_csv(sim_data, output_dir="results/new/mulsafe")
+
+    mean_tau = met.compute_mean_abs_torque(sim_data.u_actual)
+    vis.plot_per_joint_torque(
+        mean_tau,
+        show_plots=SHOW_IMAGES,
+        save_image=SAVE_DATA,
+        name=f"results/new/mulsafe/{name_date}_jtorque",
+    )
+    vis.plot_barrier_evolution(
+        time=ts,
+        h_val=sim_data.h_val,
+        u_safe=sim_data.u_actual,
+        u_unsafe=sim_data.u_nominal,
+        show_plots=SHOW_IMAGES,
+        save_image=SAVE_DATA,
+        name=f"results/new/mulsafe/{name_date}_hevolve",
+    )
 
 
 if __name__ == "__main__":

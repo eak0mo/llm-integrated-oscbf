@@ -22,6 +22,7 @@ import os
 import jax.numpy as jnp
 from jax.typing import ArrayLike
 
+# for referencing the custom library and editied files in this folder
 sys.path.append("././")
 
 from cbfpy import CBF
@@ -32,17 +33,18 @@ from oscbf.core.controllers import PoseTaskTorqueController, PoseTaskVelocityCon
 from oscbf.utils.trajectory import SinusoidalTaskTrajectory, WaypointTaskTrajectory
 from oscbf.utils.visualization import create_box
 
+
 from barriertransformer import barrier_generate as barrier
 from barriertransformer import visualization as vis
 from barriertransformer import metrics as met
 
-name_date = "cluttered_table_qwen3.5_35b_v2"
+name_date = "cus_cluttered_qwen3.5_35b_pnp_v2"
 SHOW_PLOTS = False
 SAVE_DATA = False
 RECORD_VIDEO = False
 
-exp_title = "Cluttered_Tabletop_qwen3.5_35b"
-prompt_ver = "v2"
+exp_title = "Cluttered_Tabletop_Custom_qwen3.5_35b_pnp"
+prompt_vers = "v2"
 
 np.random.seed(0)
 
@@ -229,7 +231,6 @@ def compute_torque_control(
         c=c,
     )
     # Apply the CBF safety filter
-    # return cbf.safety_filter(z, u_nom), u_nom
     u_saf = cbf.safety_filter(z, u_nom)
     return u_saf, u_nom
 
@@ -268,20 +269,20 @@ def compute_velocity_control(
     return cbf.safety_filter(q, u_nom)
 
 
-def main(control_method="torque", num_bodies=25):
+def main(control_method="torque", num_bodies=3):
     assert control_method in ["torque", "velocity"]
 
     robot = load_panda()
     z_min = 0.1
 
-    max_num_bodies = 50
+    max_num_bodies = 5
     ee_init_pos = (0.240, -0.000, 0.429)
 
     # Sample a lot of collision bodies
     all_collision_pos = np.random.uniform(
         low=[0.2, -0.4, 0.1], high=[0.8, 0.4, 0.3], size=(max_num_bodies, 3)
     )
-    all_collision_radii = np.random.uniform(low=0.01, high=0.1, size=(max_num_bodies,))
+    all_collision_radii = np.random.uniform(low=0.07, high=0.1, size=(max_num_bodies,))
     # Only use a subset of them based on the desired quantity
     collision_pos = np.atleast_2d(all_collision_pos[:num_bodies])
     collision_radii = all_collision_radii[:num_bodies]
@@ -289,22 +290,18 @@ def main(control_method="torque", num_bodies=25):
     # print(collision_radii)
     collision_data = {"positions": collision_pos, "radii": collision_radii}
 
-    # sinusoid task
-    sinusoid_init_pos = (0.31, .49, 0.35)
-    amplitude = (0.07, 0.18, 0)
-    frequency = (2.62, 0.33, 0)
+    cus_col_pos = [0.4, 0.3, 0.55]
+    cus_col_len = [0.2, 0.2, 0.2]
 
-    prompt = barrier.create_prompt_col(
-        ee_init_pos,
-        sinusoid_init_pos,
-        amplitude,
-        frequency,
-        collision_pos,
-        collision_radii,
-    )
+    # Combine sphere obstacles and the box obstacle (approximated as a sphere) for the prompt
+    all_col_pos = collision_pos.tolist() + [cus_col_pos]
+    all_col_rad = collision_radii.tolist() + [cus_col_len[0] / 2.0]
+
+    sinusoid_init_pos = (0.34, 0.34, 0.34)
+    amplitude = (0.01, 0, 0.16)
+    frequency = (0.21, 0, 2.06)
 
     # waypoint/pick and drop traj
-    way_point_init_post = (0.45, -0.5, 0.55)
     waypoints = np.array(
         [
             [0.45, -0.5, 0.55],  # t=0.0s: Start above pick location
@@ -324,15 +321,26 @@ def main(control_method="torque", num_bodies=25):
             [0, 0, -1],
         ]
     )
-    # prompt = barrier.create_prompt_pnp(
-    #     ee_init_pos, targ_pos=way_point_init_post, waypoint=waypoints, timestep=times
-    # )
+
+    prompt = barrier.create_prompt_col(
+        ee_init_pos,
+        sinusoid_init_pos,
+        amplitude,
+        frequency,
+        all_col_pos,
+        all_col_rad,
+    )
+
+    # ee_pos_min = np.array([0.15, -0.25, 0.25])
+    # ee_pos_max = np.array([0.75, 0.25, 0.75])
+    # wb_pos_min = np.array([-0.5, -0.5, 0.0])
+    # wb_pos_max = np.array([0.75, 0.5, 1.0])
 
     # llm outputs
     # model = "llama3.1"
     # print(f"Generating Barrier from {model}")
     # ee_pos_min, ee_pos_max, wb_pos_min, wb_pos_max = barrier.generate_barrier(
-    #     user_prompt=prompt, sin_traj=True
+    #     user_prompt=prompt
     # )
     # print("Barriers Generated: ee:", ee_pos_min, ee_pos_max)
     # print("Barriers Generated: whole body:", wb_pos_min, wb_pos_max)
@@ -343,7 +351,7 @@ def main(control_method="torque", num_bodies=25):
     folder = os.path.join(
         script_dir, "..", "..", "results", "llm_res", "pnp_qwen3.5_35b"
     )
-    filename = "2026-05-23_Cluttered_Tabletop_qwen3.5_35b_v2_barriers.csv"
+    filename = "2026-05-23_Cluttered_Tabletop_Custom_qwen3.5_35b_v2_barriers.csv"
     filepath = os.path.normpath(os.path.join(folder, filename))
 
     # Read CSV
@@ -379,7 +387,6 @@ def main(control_method="torque", num_bodies=25):
         wb_pos_max,
     )
     torque_cbf = CBF.from_config(torque_config)
-
     # traj = SinusoidalTaskTrajectory(
     #     init_pos=sinusoid_init_pos,
     #     init_rot=np.array(
@@ -395,6 +402,7 @@ def main(control_method="torque", num_bodies=25):
     # )
     traj = WaypointTaskTrajectory(waypoints=waypoints, times=times, init_rot=init_rot)
 
+    # velocity configs
     velocity_config = CollisionsVelocityConfig(
         robot, z_min, collision_pos, collision_radii
     )
@@ -425,12 +433,13 @@ def main(control_method="torque", num_bodies=25):
             collision_data=collision_data,
             load_table=True,
         )
+
     # create a box obstacle
     # create_box(
-    #     pos=[0.4, 0.3, 0.55],  # Center position [x, y, z] in world frame
+    #     pos=cus_col_pos,  # Center position [x, y, z] in world frame
     #     orn=[0, 0, 0, 1],  # Orientation quaternion [x, y, z, w]
     #     mass=0.0,  # Setting mass=0 makes it a fixed/static object
-    #     sidelengths=[0.2, 0.2, 0.2],  # Dimensions along [x, y, z] axes
+    #     sidelengths=cus_col_len,  # Dimensions along [x, y, z] axes
     #     use_collision=True,  # True: Robot physically collides with it in PyBullet
     #     # False: Purely visual (ghost object)
     #     rgba=[0.867, 0.016, 0.016, 1],  # Color [R, G, B, Alpha]
@@ -490,6 +499,7 @@ def main(control_method="torque", num_bodies=25):
     else:
         raise ValueError(f"Invalid control method: {control_method}")
 
+    # old main loop
     # while True:
     #     q_qdot = env.get_joint_state()
     #     z_zdot_ee_des = env.get_desired_ee_state()
@@ -500,7 +510,7 @@ def main(control_method="torque", num_bodies=25):
     if RECORD_VIDEO:
         env.client.startStateLogging(
             env.client.STATE_LOGGING_VIDEO_MP4,
-            f"results/new/table/original_{name_date}.mp4",
+            f"results/new/custom_table/custom_{name_date}_video.mp4",
         )
 
     duration = 11.0
@@ -546,7 +556,7 @@ def main(control_method="torque", num_bodies=25):
                 pixel_width,
                 pixel_height,
                 show_plots=SHOW_PLOTS,
-                name=f"results/new/table/{name_date}_cam",
+                name=f"results/new/custom_table/{name_date}_cam",
                 folder="tabletop",
                 save_image=SAVE_DATA,
             )
@@ -560,7 +570,7 @@ def main(control_method="torque", num_bodies=25):
         ts,
         show_plots=SHOW_PLOTS,
         save_image=SAVE_DATA,
-        name=f"results/new/table/{name_date}_links",
+        name=f"results/new/custom_table/{name_date}_links",
     )
 
     # metrics
@@ -590,20 +600,20 @@ def main(control_method="torque", num_bodies=25):
         joint_sphere_radii=joint_sphere_radii,
         collision_spheres=collision_pos,
         collision_sphere_radii=collision_radii,
-        experiment_title=exp_title,
-        prompt_version= prompt_ver,
+        experiment_title= exp_title,
+        prompt_version= prompt_vers,
     )
 
     if SAVE_DATA:
-        met.generate_report(sim_data, output_dir="results/new/table")
-        met.save_barriers_to_csv(sim_data,output_dir="results/new/table")
+        met.generate_report(sim_data, output_dir="results/new/custom_table")
+        met.save_barriers_to_csv(sim_data, output_dir="results/new/custom_table")
 
     mean_tau = met.compute_mean_abs_torque(sim_data.u_actual)
     vis.plot_per_joint_torque(
         mean_tau,
         show_plots=SHOW_PLOTS,
         save_image=SAVE_DATA,
-        name=f"results/new/table/{name_date}_jtorque",
+        name=f"results/new/custom_table/{name_date}_jtorque",
     )
     vis.plot_barrier_evolution(
         time=ts,
@@ -612,7 +622,7 @@ def main(control_method="torque", num_bodies=25):
         u_unsafe=sim_data.u_nominal,
         show_plots=SHOW_PLOTS,
         save_image=SAVE_DATA,
-        name=f"results/new/table/{name_date}_hevolve",
+        name=f"results/new/custom_table/{name_date}_hevolve",
     )
 
 
@@ -630,7 +640,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num_bodies",
         type=int,
-        default=25,
+        default=3,
         help="Number of collision bodies to simulate (default: 25)",
     )
     args = parser.parse_args()
